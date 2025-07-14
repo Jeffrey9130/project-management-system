@@ -71,9 +71,9 @@ export function Gantt() {
 
       const response = await ganttApi.getGanttData(params)
       
-      const ganttTasks: GanttTask[] = response.data.tasks.map((task: Task) => {
-        const startDate = task.start_date ? new Date(task.start_date) : new Date()
-        const endDate = task.end_date ? new Date(task.end_date) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      const ganttTasks: GanttTask[] = response.data.tasks.map((task: any) => {
+        const startDate = task.start ? new Date(task.start) : new Date()
+        const endDate = task.end ? new Date(task.end) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
         const duration = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24))
         
         return {
