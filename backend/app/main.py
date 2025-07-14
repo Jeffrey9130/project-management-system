@@ -638,6 +638,14 @@ def init_demo_data():
         }
         db["tasks"][task_data["id"]] = task
 
+init_demo_data()
+
+from fastapi import FastAPI
+from fastapi.middleware.wsgi import WSGIMiddleware
+
+flask_app = app
+app = FastAPI()
+app.mount("/", WSGIMiddleware(flask_app))
+
 if __name__ == '__main__':
-    init_demo_data()
-    app.run(host='0.0.0.0', port=8000, debug=True)
+    flask_app.run(host='0.0.0.0', port=8000, debug=True)
