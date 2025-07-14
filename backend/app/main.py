@@ -678,6 +678,90 @@ async def startup_event():
         created_at=datetime.now()
     )
     db["users"][user_id] = demo_user.dict()
+    
+    team_id = "team_1"
+    demo_team = Team(
+        id=team_id,
+        name="Development Team",
+        description="A development team for testing subtask creation and Gantt chart functionality",
+        admin_id=user_id,
+        member_ids=[user_id],
+        created_at=datetime.now()
+    )
+    db["teams"][team_id] = demo_team.dict()
+    db["users"][user_id]["team_ids"] = [team_id]
+    
+    project_id = "project_1"
+    demo_project = Project(
+        id=project_id,
+        name="Test Project for Subtasks",
+        description="A test project to verify subtask creation and Gantt chart functionality",
+        team_id=team_id,
+        start_date=date(2024, 1, 15),
+        end_date=date(2024, 3, 15),
+        status="active",
+        created_at=datetime.now(),
+        created_by=user_id
+    )
+    db["projects"][project_id] = demo_project.dict()
+    
+    parent_task_id = "task_1"
+    parent_task = Task(
+        id=parent_task_id,
+        title="Main Feature Development",
+        description="Develop the main feature with multiple subtasks",
+        project_id=project_id,
+        assigned_to=user_id,
+        status=TaskStatus.IN_PROGRESS,
+        priority=TaskPriority.HIGH,
+        start_date=date(2024, 1, 20),
+        end_date=date(2024, 2, 20),
+        estimated_hours=40.0,
+        progress=30,
+        created_at=datetime.now(),
+        created_by=user_id,
+        updated_at=datetime.now()
+    )
+    db["tasks"][parent_task_id] = parent_task.dict()
+    
+    subtask_id = "task_2"
+    subtask = Task(
+        id=subtask_id,
+        title="Database Schema Design",
+        description="Design and implement database schema",
+        project_id=project_id,
+        parent_task_id=parent_task_id,
+        assigned_to=user_id,
+        status=TaskStatus.DONE,
+        priority=TaskPriority.MEDIUM,
+        start_date=date(2024, 1, 22),
+        end_date=date(2024, 1, 28),
+        estimated_hours=16.0,
+        progress=100,
+        created_at=datetime.now(),
+        created_by=user_id,
+        updated_at=datetime.now()
+    )
+    db["tasks"][subtask_id] = subtask.dict()
+    
+    task2_id = "task_3"
+    task2 = Task(
+        id=task2_id,
+        title="Frontend Components",
+        description="Create reusable frontend components",
+        project_id=project_id,
+        assigned_to=user_id,
+        status=TaskStatus.TODO,
+        priority=TaskPriority.MEDIUM,
+        start_date=date(2024, 2, 1),
+        end_date=date(2024, 2, 15),
+        estimated_hours=24.0,
+        progress=0,
+        created_at=datetime.now(),
+        created_by=user_id,
+        updated_at=datetime.now()
+    )
+    db["tasks"][task2_id] = task2.dict()
 
 @app.get("/healthz")
 async def healthz():

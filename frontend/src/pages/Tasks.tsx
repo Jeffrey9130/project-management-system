@@ -54,6 +54,7 @@ export function Tasks() {
     title: '',
     description: '',
     project_id: '',
+    parent_task_id: '',
     assigned_to: '',
     priority: 'medium',
     start_date: '',
@@ -102,7 +103,11 @@ export function Tasks() {
     try {
       const taskData = {
         ...formData,
-        estimated_hours: formData.estimated_hours ? parseFloat(formData.estimated_hours) : undefined
+        parent_task_id: formData.parent_task_id === 'none' ? '' : formData.parent_task_id,
+        start_date: formData.start_date || null,
+        end_date: formData.end_date || null,
+        assigned_to: formData.assigned_to || null,
+        estimated_hours: formData.estimated_hours ? parseFloat(formData.estimated_hours) : null
       }
       
       console.log('Creating task with data:', taskData)
@@ -116,6 +121,7 @@ export function Tasks() {
         title: '',
         description: '',
         project_id: '',
+        parent_task_id: '',
         assigned_to: '',
         priority: 'medium',
         start_date: '',
@@ -259,20 +265,39 @@ export function Tasks() {
                 </div>
                 
                 <div>
-                  <Label htmlFor="assigned_to">Assign To</Label>
-                  <Select value={formData.assigned_to} onValueChange={(value) => setFormData({ ...formData, assigned_to: value })}>
+                  <Label htmlFor="parent_task">Parent Task (Optional)</Label>
+                  <Select value={formData.parent_task_id} onValueChange={(value) => setFormData({ ...formData, parent_task_id: value })}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select assignee" />
+                      <SelectValue placeholder="Select parent task" />
                     </SelectTrigger>
                     <SelectContent>
-                      {users.map((user) => (
-                        <SelectItem key={user.id} value={user.id}>
-                          {user.name}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="none">No parent task</SelectItem>
+                      {tasks
+                        .filter(task => task.project_id === formData.project_id && !task.parent_task_id)
+                        .map((task) => (
+                          <SelectItem key={task.id} value={task.id}>
+                            {task.title}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+              
+              <div>
+                <Label htmlFor="assigned_to">Assign To</Label>
+                <Select value={formData.assigned_to} onValueChange={(value) => setFormData({ ...formData, assigned_to: value })}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select assignee" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {users.map((user) => (
+                      <SelectItem key={user.id} value={user.id}>
+                        {user.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               
               <div className="grid grid-cols-3 gap-4">
@@ -424,12 +449,17 @@ export function Tasks() {
                   <TableRow key={task.id}>
                     <TableCell>
                       <div>
-                        <Link 
-                          to={`/tasks/${task.id}`}
-                          className="font-medium hover:text-blue-600"
-                        >
-                          {task.title}
-                        </Link>
+                        <div className="flex items-center">
+                          {task.parent_task_id && (
+                            <div className="w-4 h-4 mr-2 text-gray-400">└</div>
+                          )}
+                          <Link 
+                            to={`/tasks/${task.id}`}
+                            className="font-medium hover:text-blue-600"
+                          >
+                            {task.title}
+                          </Link>
+                        </div>
                         {task.description && (
                           <div className="text-sm text-gray-600 mt-1">
                             {task.description.substring(0, 100)}

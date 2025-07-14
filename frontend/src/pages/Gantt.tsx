@@ -133,7 +133,6 @@ export function Gantt() {
   minDate.setDate(minDate.getDate() - 7)
   maxDate.setDate(maxDate.getDate() + 7)
   
-  const totalDays = Math.ceil((maxDate.getTime() - minDate.getTime()) / (1000 * 60 * 60 * 24))
   const dayWidth = 40 // pixels per day
 
   const getTaskPosition = (task: GanttTask) => {
@@ -352,16 +351,18 @@ export function Gantt() {
                             }}
                           />
 
-                          {/* Task Dates */}
-                          <div className="absolute bottom-2 left-0 text-xs text-gray-600">
-                            <div style={{ left: position.left }}>
-                              {task.startDate.toLocaleDateString()}
-                            </div>
+                          {/* Task Dates - Improved positioning and visibility */}
+                          <div 
+                            className="absolute -bottom-8 text-xs font-medium text-gray-800 bg-yellow-50 px-2 py-1 rounded shadow-md border border-gray-300 z-10"
+                            style={{ left: position.left }}
+                          >
+                            Start: {task.startDate.toLocaleDateString()}
                           </div>
-                          <div className="absolute bottom-2 right-0 text-xs text-gray-600">
-                            <div style={{ right: totalDays * dayWidth - position.left - position.width }}>
-                              {task.endDate.toLocaleDateString()}
-                            </div>
+                          <div 
+                            className="absolute -bottom-8 text-xs font-medium text-gray-800 bg-blue-50 px-2 py-1 rounded shadow-md border border-gray-300 z-10"
+                            style={{ left: position.left + position.width - 100 }}
+                          >
+                            End: {task.endDate.toLocaleDateString()}
                           </div>
                         </div>
                       </div>

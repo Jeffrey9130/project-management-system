@@ -5,7 +5,10 @@ import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Progress } from '../components/ui/progress'
 import { Textarea } from '../components/ui/textarea'
+import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { ArrowLeft, User as UserIcon, FileText, MessageSquare, Plus } from 'lucide-react'
 import { taskApi, fileApi, commentApi, projectApi, userApi, type Task, type FileItem, type Comment, type Project, type User } from '../lib/api'
 import { useToast } from '../hooks/use-toast'
@@ -20,6 +23,17 @@ export function TaskDetail() {
   const [comments, setComments] = useState<Comment[]>([])
   const [loading, setLoading] = useState(true)
   const [newComment, setNewComment] = useState('')
+  const [createSubtaskOpen, setCreateSubtaskOpen] = useState(false)
+  const [subtaskFormData, setSubtaskFormData] = useState({
+    title: '',
+    description: '',
+    assigned_to: '',
+    priority: 'medium',
+    start_date: '',
+    end_date: '',
+    estimated_hours: ''
+  })
+  const [users, setUsers] = useState<User[]>([])
   const { toast } = useToast()
 
   useEffect(() => {
@@ -30,17 +44,19 @@ export function TaskDetail() {
 
   const loadTaskData = async (taskId: string) => {
     try {
-      const [taskRes, subtasksRes, filesRes, commentsRes] = await Promise.all([
+      const [taskRes, subtasksRes, filesRes, commentsRes, usersRes] = await Promise.all([
         taskApi.getTask(taskId),
         taskApi.getSubtasks(taskId),
         fileApi.getFiles({ task_id: taskId }),
-        commentApi.getComments({ task_id: taskId })
+        commentApi.getComments({ task_id: taskId }),
+        userApi.getUsers()
       ])
       
       setTask(taskRes.data)
       setSubtasks(subtasksRes.data)
       setFiles(filesRes.data)
       setComments(commentsRes.data)
+      setUsers(usersRes.data)
 
       if (taskRes.data.project_id) {
         const projectRes = await projectApi.getProject(taskRes.data.project_id)
@@ -91,6 +107,52 @@ export function TaskDetail() {
       toast({
         title: "Error",
         description: "Failed to add comment",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleCreateSubtask = async () => {
+    if (!subtaskFormData.title || !task) {
+      toast({
+        title: "Error",
+        description: "Please fill in all required fields",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const subtaskData = {
+        ...subtaskFormData,
+        project_id: task.project_id,
+        parent_task_id: task.id,
+        estimated_hours: subtaskFormData.estimated_hours ? parseFloat(subtaskFormData.estimated_hours) : undefined
+      }
+      
+      await taskApi.createTask(subtaskData)
+      toast({
+        title: "Success",
+        description: "Subtask created successfully",
+      })
+      setCreateSubtaskOpen(false)
+      setSubtaskFormData({
+        title: '',
+        description: '',
+        assigned_to: '',
+        priority: 'medium',
+        start_date: '',
+        end_date: '',
+        estimated_hours: ''
+      })
+      if (task) {
+        loadTaskData(task.id)
+      }
+    } catch (error) {
+      console.error('Failed to create subtask:', error)
+      toast({
+        title: "Error",
+        description: "Failed to create subtask",
         variant: "destructive",
       })
     }
@@ -256,12 +318,131 @@ export function TaskDetail() {
         </CardContent>
       </Card>
 
-      {subtasks.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Subtasks ({subtasks.length})</CardTitle>
-          </CardHeader>
-          <CardContent>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardTitle>Subtasks ({subtasks.length})</CardTitle>
+          <Dialog open={createSubtaskOpen} onOpenChange={setCreateSubtaskOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm">
+                <Plus className="w-4 h-4 mr-2" />
+                Add Subtask
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Create Subtask</DialogTitle>
+                <DialogDescription>
+                  Add a new subtask for "{task?.title}"
+                </DialogDescription>
+              </DialogHeader>
+              
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="subtask_title">Subtask Title *</Label>
+                  <Input
+                    id="subtask_title"
+                    value={subtaskFormData.title}
+                    onChange={(e) => setSubtaskFormData({ ...subtaskFormData, title: e.target.value })}
+                    placeholder="Enter subtask title"
+                  />
+                </div>
+                
+                <div>
+                  <Label htmlFor="subtask_description">Description</Label>
+                  <Textarea
+                    id="subtask_description"
+                    value={subtaskFormData.description}
+                    onChange={(e) => setSubtaskFormData({ ...subtaskFormData, description: e.target.value })}
+                    placeholder="Subtask description"
+                  />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="subtask_assigned_to">Assign To</Label>
+                    <Select value={subtaskFormData.assigned_to} onValueChange={(value) => setSubtaskFormData({ ...subtaskFormData, assigned_to: value })}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select assignee" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {users.map((user) => (
+                          <SelectItem key={user.id} value={user.id}>
+                            {user.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <div>
+                    <Label htmlFor="subtask_priority">Priority</Label>
+                    <Select value={subtaskFormData.priority} onValueChange={(value) => setSubtaskFormData({ ...subtaskFormData, priority: value })}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="low">Low</SelectItem>
+                        <SelectItem value="medium">Medium</SelectItem>
+                        <SelectItem value="high">High</SelectItem>
+                        <SelectItem value="urgent">Urgent</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <Label htmlFor="subtask_start_date">Start Date</Label>
+                    <Input
+                      id="subtask_start_date"
+                      type="date"
+                      value={subtaskFormData.start_date}
+                      onChange={(e) => setSubtaskFormData({ ...subtaskFormData, start_date: e.target.value })}
+                    />
+                  </div>
+                  
+                  <div>
+                    <Label htmlFor="subtask_end_date">Due Date</Label>
+                    <Input
+                      id="subtask_end_date"
+                      type="date"
+                      value={subtaskFormData.end_date}
+                      onChange={(e) => setSubtaskFormData({ ...subtaskFormData, end_date: e.target.value })}
+                    />
+                  </div>
+                  
+                  <div>
+                    <Label htmlFor="subtask_estimated_hours">Estimated Hours</Label>
+                    <Input
+                      id="subtask_estimated_hours"
+                      type="number"
+                      step="0.5"
+                      value={subtaskFormData.estimated_hours}
+                      onChange={(e) => setSubtaskFormData({ ...subtaskFormData, estimated_hours: e.target.value })}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setCreateSubtaskOpen(false)}>
+                  Cancel
+                </Button>
+                <Button onClick={handleCreateSubtask}>
+                  Create Subtask
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </CardHeader>
+        <CardContent>
+          {subtasks.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <p>No subtasks yet</p>
+              <p className="text-sm">Click "Add Subtask" to create one</p>
+            </div>
+          ) : (
             <div className="space-y-3">
               {subtasks.map((subtask) => (
                 <div key={subtask.id} className="flex items-center justify-between p-3 border rounded">
@@ -286,9 +467,9 @@ export function TaskDetail() {
                 </div>
               ))}
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
