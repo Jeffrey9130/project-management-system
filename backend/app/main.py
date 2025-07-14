@@ -1,23 +1,21 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-from datetime import datetime, date
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+from flask_jwt_extended import JWTManager, jwt_required, create_access_token, get_jwt_identity
+from werkzeug.utils import secure_filename
+from datetime import datetime, date, timedelta
 from enum import Enum
 import uuid
 import json
+import io
+import os
 
-app = FastAPI(title="Project Management System API")
+app = Flask(__name__)
 
-# Disable CORS. Do not remove this for full-stack development.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-)
+app.config['JWT_SECRET_KEY'] = 'demo-secret-key'
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)
+
+jwt = JWTManager(app)
+CORS(app, origins=["*"], supports_credentials=True)
 
 db = {
     "users": {},
@@ -30,408 +28,316 @@ db = {
     "api_integrations": {}
 }
 
-class UserRole(str, Enum):
+class UserRole:
     ADMIN = "admin"
     MANAGER = "manager"
     MEMBER = "member"
     VIEWER = "viewer"
 
-class TaskStatus(str, Enum):
+class TaskStatus:
     TODO = "todo"
     IN_PROGRESS = "in_progress"
     REVIEW = "review"
     DONE = "done"
 
-class TaskPriority(str, Enum):
+class TaskPriority:
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     URGENT = "urgent"
 
-class User(BaseModel):
-    id: str
-    name: str
-    email: str
-    role: UserRole
-    team_ids: List[str] = []
-    created_at: datetime
-
-class Team(BaseModel):
-    id: str
-    name: str
-    description: Optional[str] = None
-    admin_id: str
-    member_ids: List[str] = []
-    created_at: datetime
-
-class Project(BaseModel):
-    id: str
-    name: str
-    description: Optional[str] = None
-    team_id: str
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    status: str = "active"
-    created_at: datetime
-    created_by: str
-
-class Task(BaseModel):
-    id: str
-    title: str
-    description: Optional[str] = None
-    project_id: str
-    parent_task_id: Optional[str] = None
-    assigned_to: Optional[str] = None
-    status: TaskStatus = TaskStatus.TODO
-    priority: TaskPriority = TaskPriority.MEDIUM
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    estimated_hours: Optional[float] = None
-    actual_hours: Optional[float] = None
-    progress: int = 0
-    file_ids: List[str] = []
-    created_at: datetime
-    created_by: str
-    updated_at: datetime
-
-class FileItem(BaseModel):
-    id: str
-    name: str
-    size: int
-    content_type: str
-    project_id: Optional[str] = None
-    task_id: Optional[str] = None
-    uploaded_by: str
-    uploaded_at: datetime
-    is_public: bool = False
-
-class Comment(BaseModel):
-    id: str
-    content: str
-    file_id: Optional[str] = None
-    task_id: Optional[str] = None
-    author_id: str
-    created_at: datetime
-
-class Notification(BaseModel):
-    id: str
-    title: str
-    message: str
-    user_id: str
-    type: str
-    read: bool = False
-    created_at: datetime
-
-class APIIntegration(BaseModel):
-    id: str
-    name: str
-    endpoint: str
-    method: str
-    headers: Dict[str, str] = {}
-    project_id: str
-    created_by: str
-    created_at: datetime
-
-class CreateUserRequest(BaseModel):
-    name: str
-    email: str
-    role: UserRole = UserRole.MEMBER
-
-class CreateTeamRequest(BaseModel):
-    name: str
-    description: Optional[str] = None
-
-class CreateProjectRequest(BaseModel):
-    name: str
-    description: Optional[str] = None
-    team_id: str
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-
-class CreateTaskRequest(BaseModel):
-    title: str
-    description: Optional[str] = None
-    project_id: str
-    parent_task_id: Optional[str] = None
-    assigned_to: Optional[str] = None
-    priority: TaskPriority = TaskPriority.MEDIUM
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    estimated_hours: Optional[float] = None
-
-class UpdateTaskRequest(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    assigned_to: Optional[str] = None
-    status: Optional[TaskStatus] = None
-    priority: Optional[TaskPriority] = None
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    estimated_hours: Optional[float] = None
-    actual_hours: Optional[float] = None
-    progress: Optional[int] = None
-
-class CreateCommentRequest(BaseModel):
-    content: str
-    file_id: Optional[str] = None
-    task_id: Optional[str] = None
-
-class CreateAPIIntegrationRequest(BaseModel):
-    name: str
-    endpoint: str
-    method: str
-    headers: Dict[str, str] = {}
-    project_id: str
-
-security = HTTPBearer()
-
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+def get_current_user():
     return "user_1"
 
-@app.post("/api/users", response_model=User)
-async def create_user(request: CreateUserRequest, current_user: str = Depends(get_current_user)):
+def serialize_date(obj):
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    return obj
+
+def send_task_completion_notification(task_id, user_id):
+    task = db["tasks"].get(task_id)
+    if not task:
+        return
+    
+    notification_id = str(uuid.uuid4())
+    notification = {
+        "id": notification_id,
+        "title": "Task Completed",
+        "message": f"Task '{task['title']}' has been completed",
+        "user_id": "user_1",
+        "type": "task_completion",
+        "read": False,
+        "created_at": datetime.now().isoformat()
+    }
+    db["notifications"][notification_id] = notification
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    access_token = create_access_token(identity="user_1")
+    return jsonify(access_token=access_token)
+
+@app.route('/api/users', methods=['POST'])
+def create_user():
+    data = request.get_json()
     user_id = str(uuid.uuid4())
-    user = User(
-        id=user_id,
-        name=request.name,
-        email=request.email,
-        role=request.role,
-        created_at=datetime.now()
-    )
-    db["users"][user_id] = user.dict()
-    return user
+    user = {
+        "id": user_id,
+        "name": data.get("name"),
+        "email": data.get("email"),
+        "role": data.get("role", UserRole.MEMBER),
+        "team_ids": [],
+        "created_at": datetime.now().isoformat()
+    }
+    db["users"][user_id] = user
+    return jsonify(user)
 
-@app.get("/api/users", response_model=List[User])
-async def get_users(current_user: str = Depends(get_current_user)):
-    return [User(**user) for user in db["users"].values()]
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    return jsonify(list(db["users"].values()))
 
-@app.get("/api/users/{user_id}", response_model=User)
-async def get_user(user_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/users/<user_id>', methods=['GET'])
+def get_user(user_id):
     if user_id not in db["users"]:
-        raise HTTPException(status_code=404, detail="User not found")
-    return User(**db["users"][user_id])
+        return jsonify({"error": "User not found"}), 404
+    return jsonify(db["users"][user_id])
 
-@app.post("/api/teams", response_model=Team)
-async def create_team(request: CreateTeamRequest, current_user: str = Depends(get_current_user)):
+@app.route('/api/teams', methods=['POST'])
+def create_team():
+    data = request.get_json()
+    current_user = get_current_user()
     team_id = str(uuid.uuid4())
-    team = Team(
-        id=team_id,
-        name=request.name,
-        description=request.description,
-        admin_id=current_user,
-        member_ids=[current_user],
-        created_at=datetime.now()
-    )
-    db["teams"][team_id] = team.dict()
+    team = {
+        "id": team_id,
+        "name": data.get("name"),
+        "description": data.get("description"),
+        "admin_id": current_user,
+        "member_ids": [current_user],
+        "created_at": datetime.now().isoformat()
+    }
+    db["teams"][team_id] = team
     
     if current_user in db["users"]:
         db["users"][current_user]["team_ids"].append(team_id)
     
-    return team
+    return jsonify(team)
 
-@app.get("/api/teams", response_model=List[Team])
-async def get_teams(current_user: str = Depends(get_current_user)):
-    return [Team(**team) for team in db["teams"].values()]
+@app.route('/api/teams', methods=['GET'])
+def get_teams():
+    return jsonify(list(db["teams"].values()))
 
-@app.get("/api/teams/{team_id}", response_model=Team)
-async def get_team(team_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/teams/<team_id>', methods=['GET'])
+def get_team(team_id):
     if team_id not in db["teams"]:
-        raise HTTPException(status_code=404, detail="Team not found")
-    return Team(**db["teams"][team_id])
+        return jsonify({"error": "Team not found"}), 404
+    return jsonify(db["teams"][team_id])
 
-@app.post("/api/teams/{team_id}/members/{user_id}")
-async def add_team_member(team_id: str, user_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/teams/<team_id>/members/<user_id>', methods=['POST'])
+def add_team_member(team_id, user_id):
     if team_id not in db["teams"]:
-        raise HTTPException(status_code=404, detail="Team not found")
+        return jsonify({"error": "Team not found"}), 404
     if user_id not in db["users"]:
-        raise HTTPException(status_code=404, detail="User not found")
+        return jsonify({"error": "User not found"}), 404
     
     team = db["teams"][team_id]
+    current_user = get_current_user()
+    
     if current_user != team["admin_id"]:
-        raise HTTPException(status_code=403, detail="Only team admin can add members")
+        return jsonify({"error": "Only team admin can add members"}), 403
     
     if user_id not in team["member_ids"]:
         team["member_ids"].append(user_id)
         db["users"][user_id]["team_ids"].append(team_id)
     
-    return {"message": "Member added successfully"}
+    return jsonify({"message": "Member added successfully"})
 
-@app.delete("/api/teams/{team_id}/members/{user_id}")
-async def remove_team_member(team_id: str, user_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/teams/<team_id>/members/<user_id>', methods=['DELETE'])
+def remove_team_member(team_id, user_id):
     if team_id not in db["teams"]:
-        raise HTTPException(status_code=404, detail="Team not found")
+        return jsonify({"error": "Team not found"}), 404
     
     team = db["teams"][team_id]
+    current_user = get_current_user()
+    
     if current_user != team["admin_id"]:
-        raise HTTPException(status_code=403, detail="Only team admin can remove members")
+        return jsonify({"error": "Only team admin can remove members"}), 403
     
     if user_id in team["member_ids"]:
         team["member_ids"].remove(user_id)
         if team_id in db["users"][user_id]["team_ids"]:
             db["users"][user_id]["team_ids"].remove(team_id)
     
-    return {"message": "Member removed successfully"}
+    return jsonify({"message": "Member removed successfully"})
 
-@app.post("/api/projects", response_model=Project)
-async def create_project(request: CreateProjectRequest, current_user: str = Depends(get_current_user)):
-    if request.team_id not in db["teams"]:
-        raise HTTPException(status_code=404, detail="Team not found")
+@app.route('/api/projects', methods=['POST'])
+def create_project():
+    data = request.get_json()
+    current_user = get_current_user()
+    
+    if data.get("team_id") not in db["teams"]:
+        return jsonify({"error": "Team not found"}), 404
     
     project_id = str(uuid.uuid4())
-    project = Project(
-        id=project_id,
-        name=request.name,
-        description=request.description,
-        team_id=request.team_id,
-        start_date=request.start_date,
-        end_date=request.end_date,
-        created_at=datetime.now(),
-        created_by=current_user
-    )
-    db["projects"][project_id] = project.dict()
-    return project
+    project = {
+        "id": project_id,
+        "name": data.get("name"),
+        "description": data.get("description"),
+        "team_id": data.get("team_id"),
+        "start_date": data.get("start_date"),
+        "end_date": data.get("end_date"),
+        "status": "active",
+        "created_at": datetime.now().isoformat(),
+        "created_by": current_user
+    }
+    db["projects"][project_id] = project
+    return jsonify(project)
 
-@app.get("/api/projects", response_model=List[Project])
-async def get_projects(team_id: Optional[str] = None, current_user: str = Depends(get_current_user)):
+@app.route('/api/projects', methods=['GET'])
+def get_projects():
+    team_id = request.args.get('team_id')
     projects = []
     for project in db["projects"].values():
         if team_id is None or project["team_id"] == team_id:
-            projects.append(Project(**project))
-    return projects
+            projects.append(project)
+    return jsonify(projects)
 
-@app.get("/api/projects/{project_id}", response_model=Project)
-async def get_project(project_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/projects/<project_id>', methods=['GET'])
+def get_project(project_id):
     if project_id not in db["projects"]:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return Project(**db["projects"][project_id])
+        return jsonify({"error": "Project not found"}), 404
+    return jsonify(db["projects"][project_id])
 
-@app.put("/api/projects/{project_id}", response_model=Project)
-async def update_project(project_id: str, request: CreateProjectRequest, current_user: str = Depends(get_current_user)):
+@app.route('/api/projects/<project_id>', methods=['PUT'])
+def update_project(project_id):
     if project_id not in db["projects"]:
-        raise HTTPException(status_code=404, detail="Project not found")
+        return jsonify({"error": "Project not found"}), 404
     
+    data = request.get_json()
     project = db["projects"][project_id]
     project.update({
-        "name": request.name,
-        "description": request.description,
-        "team_id": request.team_id,
-        "start_date": request.start_date.isoformat() if request.start_date else None,
-        "end_date": request.end_date.isoformat() if request.end_date else None
+        "name": data.get("name", project["name"]),
+        "description": data.get("description", project["description"]),
+        "team_id": data.get("team_id", project["team_id"]),
+        "start_date": data.get("start_date", project["start_date"]),
+        "end_date": data.get("end_date", project["end_date"])
     })
     
-    return Project(**project)
+    return jsonify(project)
 
-@app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/projects/<project_id>', methods=['DELETE'])
+def delete_project(project_id):
     if project_id not in db["projects"]:
-        raise HTTPException(status_code=404, detail="Project not found")
+        return jsonify({"error": "Project not found"}), 404
     
     tasks_to_delete = [task_id for task_id, task in db["tasks"].items() if task["project_id"] == project_id]
     for task_id in tasks_to_delete:
         del db["tasks"][task_id]
     
     del db["projects"][project_id]
-    return {"message": "Project deleted successfully"}
+    return jsonify({"message": "Project deleted successfully"})
 
-@app.post("/api/tasks", response_model=Task)
-async def create_task(request: CreateTaskRequest, current_user: str = Depends(get_current_user)):
-    if request.project_id not in db["projects"]:
-        raise HTTPException(status_code=404, detail="Project not found")
+@app.route('/api/tasks', methods=['POST'])
+def create_task():
+    data = request.get_json()
+    current_user = get_current_user()
     
-    if request.parent_task_id and request.parent_task_id not in db["tasks"]:
-        raise HTTPException(status_code=404, detail="Parent task not found")
+    if data.get("project_id") not in db["projects"]:
+        return jsonify({"error": "Project not found"}), 404
+    
+    if data.get("parent_task_id") and data.get("parent_task_id") not in db["tasks"]:
+        return jsonify({"error": "Parent task not found"}), 404
     
     task_id = str(uuid.uuid4())
-    task = Task(
-        id=task_id,
-        title=request.title,
-        description=request.description,
-        project_id=request.project_id,
-        parent_task_id=request.parent_task_id,
-        assigned_to=request.assigned_to,
-        priority=request.priority,
-        start_date=request.start_date,
-        end_date=request.end_date,
-        estimated_hours=request.estimated_hours,
-        created_at=datetime.now(),
-        created_by=current_user,
-        updated_at=datetime.now()
-    )
-    db["tasks"][task_id] = task.dict()
-    return task
+    task = {
+        "id": task_id,
+        "title": data.get("title"),
+        "description": data.get("description"),
+        "project_id": data.get("project_id"),
+        "parent_task_id": data.get("parent_task_id"),
+        "assigned_to": data.get("assigned_to"),
+        "status": data.get("status", TaskStatus.TODO),
+        "priority": data.get("priority", TaskPriority.MEDIUM),
+        "start_date": data.get("start_date"),
+        "end_date": data.get("end_date"),
+        "estimated_hours": data.get("estimated_hours"),
+        "actual_hours": data.get("actual_hours"),
+        "progress": data.get("progress", 0),
+        "file_ids": [],
+        "created_at": datetime.now().isoformat(),
+        "created_by": current_user,
+        "updated_at": datetime.now().isoformat()
+    }
+    db["tasks"][task_id] = task
+    return jsonify(task)
 
-@app.get("/api/tasks", response_model=List[Task])
-async def get_tasks(
-    project_id: Optional[str] = None,
-    assigned_to: Optional[str] = None,
-    status: Optional[TaskStatus] = None,
-    current_user: str = Depends(get_current_user)
-):
+@app.route('/api/tasks', methods=['GET'])
+def get_tasks():
+    project_id = request.args.get('project_id')
+    assigned_to = request.args.get('assigned_to')
+    status = request.args.get('status')
+    
     tasks = []
     for task in db["tasks"].values():
         if (project_id is None or task["project_id"] == project_id) and \
            (assigned_to is None or task["assigned_to"] == assigned_to) and \
            (status is None or task["status"] == status):
-            tasks.append(Task(**task))
-    return tasks
+            tasks.append(task)
+    return jsonify(tasks)
 
-@app.get("/api/tasks/{task_id}", response_model=Task)
-async def get_task(task_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/tasks/<task_id>', methods=['GET'])
+def get_task(task_id):
     if task_id not in db["tasks"]:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return Task(**db["tasks"][task_id])
+        return jsonify({"error": "Task not found"}), 404
+    return jsonify(db["tasks"][task_id])
 
-@app.put("/api/tasks/{task_id}", response_model=Task)
-async def update_task(task_id: str, request: UpdateTaskRequest, current_user: str = Depends(get_current_user)):
+@app.route('/api/tasks/<task_id>', methods=['PUT'])
+def update_task(task_id):
     if task_id not in db["tasks"]:
-        raise HTTPException(status_code=404, detail="Task not found")
+        return jsonify({"error": "Task not found"}), 404
     
+    data = request.get_json()
     task = db["tasks"][task_id]
-    update_data = request.dict(exclude_unset=True)
+    old_status = task["status"]
     
-    if "start_date" in update_data and update_data["start_date"]:
-        update_data["start_date"] = update_data["start_date"].isoformat()
-    if "end_date" in update_data and update_data["end_date"]:
-        update_data["end_date"] = update_data["end_date"].isoformat()
+    for key, value in data.items():
+        if value is not None:
+            task[key] = value
     
-    task.update(update_data)
     task["updated_at"] = datetime.now().isoformat()
     
-    if request.status == TaskStatus.DONE and task["status"] != TaskStatus.DONE:
-        await send_task_completion_notification(task_id, current_user)
+    if data.get("status") == TaskStatus.DONE and old_status != TaskStatus.DONE:
+        send_task_completion_notification(task_id, get_current_user())
     
-    return Task(**task)
+    return jsonify(task)
 
-@app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/tasks/<task_id>', methods=['DELETE'])
+def delete_task(task_id):
     if task_id not in db["tasks"]:
-        raise HTTPException(status_code=404, detail="Task not found")
+        return jsonify({"error": "Task not found"}), 404
     
     subtasks_to_delete = [tid for tid, t in db["tasks"].items() if t["parent_task_id"] == task_id]
     for subtask_id in subtasks_to_delete:
         del db["tasks"][subtask_id]
     
     del db["tasks"][task_id]
-    return {"message": "Task deleted successfully"}
+    return jsonify({"message": "Task deleted successfully"})
 
-@app.get("/api/tasks/{task_id}/subtasks", response_model=List[Task])
-async def get_subtasks(task_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/tasks/<task_id>/subtasks', methods=['GET'])
+def get_subtasks(task_id):
     if task_id not in db["tasks"]:
-        raise HTTPException(status_code=404, detail="Task not found")
+        return jsonify({"error": "Task not found"}), 404
     
     subtasks = []
     for task in db["tasks"].values():
         if task["parent_task_id"] == task_id:
-            subtasks.append(Task(**task))
-    return subtasks
+            subtasks.append(task)
+    return jsonify(subtasks)
 
-@app.get("/api/gantt")
-async def get_gantt_data(
-    project_id: Optional[str] = None,
-    team_id: Optional[str] = None,
-    assigned_to: Optional[str] = None,
-    current_user: str = Depends(get_current_user)
-):
+@app.route('/api/gantt', methods=['GET'])
+def get_gantt_data():
+    project_id = request.args.get('project_id')
+    team_id = request.args.get('team_id')
+    assigned_to = request.args.get('assigned_to')
+    
     tasks = []
     for task in db["tasks"].values():
         if project_id and task["project_id"] != project_id:
@@ -456,313 +362,282 @@ async def get_gantt_data(
         }
         tasks.append(gantt_task)
     
-    return {"tasks": tasks}
+    return jsonify({"tasks": tasks})
 
-@app.post("/api/files/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    project_id: Optional[str] = None,
-    task_id: Optional[str] = None,
-    is_public: bool = False,
-    current_user: str = Depends(get_current_user)
-):
+@app.route('/api/files/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file provided"}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No file selected"}), 400
+    
+    project_id = request.form.get('project_id')
+    task_id = request.form.get('task_id')
+    is_public = request.form.get('is_public', 'false').lower() == 'true'
+    current_user = get_current_user()
+    
     file_id = str(uuid.uuid4())
-    content = await file.read()
+    content = file.read()
     
-    file_item = FileItem(
-        id=file_id,
-        name=file.filename,
-        size=len(content),
-        content_type=file.content_type,
-        project_id=project_id,
-        task_id=task_id,
-        uploaded_by=current_user,
-        uploaded_at=datetime.now(),
-        is_public=is_public
-    )
-    
-    db["files"][file_id] = {
-        **file_item.dict(),
+    file_item = {
+        "id": file_id,
+        "name": secure_filename(file.filename),
+        "size": len(content),
+        "content_type": file.content_type,
+        "project_id": project_id,
+        "task_id": task_id,
+        "uploaded_by": current_user,
+        "uploaded_at": datetime.now().isoformat(),
+        "is_public": is_public,
         "content": content
     }
+    
+    db["files"][file_id] = file_item
     
     if task_id and task_id in db["tasks"]:
         db["tasks"][task_id]["file_ids"].append(file_id)
     
-    return file_item
+    file_response = {k: v for k, v in file_item.items() if k != "content"}
+    return jsonify(file_response)
 
-@app.get("/api/files", response_model=List[FileItem])
-async def get_files(
-    project_id: Optional[str] = None,
-    task_id: Optional[str] = None,
-    current_user: str = Depends(get_current_user)
-):
+@app.route('/api/files', methods=['GET'])
+def get_files():
+    project_id = request.args.get('project_id')
+    task_id = request.args.get('task_id')
+    
     files = []
     for file_data in db["files"].values():
         if (project_id is None or file_data["project_id"] == project_id) and \
            (task_id is None or file_data["task_id"] == task_id):
             file_item = {k: v for k, v in file_data.items() if k != "content"}
-            files.append(FileItem(**file_item))
-    return files
+            files.append(file_item)
+    return jsonify(files)
 
-@app.get("/api/files/{file_id}")
-async def download_file(file_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/files/<file_id>', methods=['GET'])
+def download_file(file_id):
     if file_id not in db["files"]:
-        raise HTTPException(status_code=404, detail="File not found")
+        return jsonify({"error": "File not found"}), 404
     
     file_data = db["files"][file_id]
     return {
-        "filename": file_data["name"],
+        "name": file_data["name"],
         "content_type": file_data["content_type"],
         "size": file_data["size"]
     }
 
-@app.delete("/api/files/{file_id}")
-async def delete_file(file_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/files/<file_id>', methods=['DELETE'])
+def delete_file(file_id):
     if file_id not in db["files"]:
-        raise HTTPException(status_code=404, detail="File not found")
+        return jsonify({"error": "File not found"}), 404
     
     file_data = db["files"][file_id]
-    if file_data["uploaded_by"] != current_user:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this file")
-    
     if file_data["task_id"] and file_data["task_id"] in db["tasks"]:
         task = db["tasks"][file_data["task_id"]]
         if file_id in task["file_ids"]:
             task["file_ids"].remove(file_id)
     
     del db["files"][file_id]
-    return {"message": "File deleted successfully"}
+    return jsonify({"message": "File deleted successfully"})
 
-@app.post("/api/comments", response_model=Comment)
-async def create_comment(request: CreateCommentRequest, current_user: str = Depends(get_current_user)):
-    if request.file_id and request.file_id not in db["files"]:
-        raise HTTPException(status_code=404, detail="File not found")
-    if request.task_id and request.task_id not in db["tasks"]:
-        raise HTTPException(status_code=404, detail="Task not found")
+@app.route('/api/comments', methods=['POST'])
+def create_comment():
+    data = request.get_json()
+    current_user = get_current_user()
     
     comment_id = str(uuid.uuid4())
-    comment = Comment(
-        id=comment_id,
-        content=request.content,
-        file_id=request.file_id,
-        task_id=request.task_id,
-        author_id=current_user,
-        created_at=datetime.now()
-    )
-    db["comments"][comment_id] = comment.dict()
-    return comment
+    comment = {
+        "id": comment_id,
+        "content": data.get("content"),
+        "file_id": data.get("file_id"),
+        "task_id": data.get("task_id"),
+        "author_id": current_user,
+        "created_at": datetime.now().isoformat()
+    }
+    db["comments"][comment_id] = comment
+    return jsonify(comment)
 
-@app.get("/api/comments", response_model=List[Comment])
-async def get_comments(
-    file_id: Optional[str] = None,
-    task_id: Optional[str] = None,
-    current_user: str = Depends(get_current_user)
-):
+@app.route('/api/comments', methods=['GET'])
+def get_comments():
+    file_id = request.args.get('file_id')
+    task_id = request.args.get('task_id')
+    
     comments = []
     for comment in db["comments"].values():
         if (file_id is None or comment["file_id"] == file_id) and \
            (task_id is None or comment["task_id"] == task_id):
-            comments.append(Comment(**comment))
-    return comments
+            comments.append(comment)
+    return jsonify(comments)
 
-@app.delete("/api/comments/{comment_id}")
-async def delete_comment(comment_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/comments/<comment_id>', methods=['DELETE'])
+def delete_comment(comment_id):
     if comment_id not in db["comments"]:
-        raise HTTPException(status_code=404, detail="Comment not found")
-    
-    comment = db["comments"][comment_id]
-    if comment["author_id"] != current_user:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
+        return jsonify({"error": "Comment not found"}), 404
     
     del db["comments"][comment_id]
-    return {"message": "Comment deleted successfully"}
+    return jsonify({"message": "Comment deleted successfully"})
 
-async def send_task_completion_notification(task_id: str, completed_by: str):
-    task = db["tasks"][task_id]
-    project = db["projects"][task["project_id"]]
-    team = db["teams"][project["team_id"]]
-    
-    notification_id = str(uuid.uuid4())
-    notification = Notification(
-        id=notification_id,
-        title="Task Completed",
-        message=f"Task '{task['title']}' has been completed by {completed_by}",
-        user_id=team["admin_id"],
-        type="task_completion",
-        created_at=datetime.now()
-    )
-    db["notifications"][notification_id] = notification.dict()
+@app.route('/api/notifications', methods=['GET'])
+def get_notifications():
+    user_id = request.args.get('user_id', get_current_user())
+    notifications = [n for n in db["notifications"].values() if n["user_id"] == user_id]
+    return jsonify(notifications)
 
-@app.get("/api/notifications", response_model=List[Notification])
-async def get_notifications(current_user: str = Depends(get_current_user)):
-    notifications = []
-    for notification in db["notifications"].values():
-        if notification["user_id"] == current_user:
-            notifications.append(Notification(**notification))
-    return sorted(notifications, key=lambda x: x.created_at, reverse=True)
-
-@app.put("/api/notifications/{notification_id}/read")
-async def mark_notification_read(notification_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/notifications/<notification_id>/read', methods=['PUT'])
+def mark_notification_read(notification_id):
     if notification_id not in db["notifications"]:
-        raise HTTPException(status_code=404, detail="Notification not found")
+        return jsonify({"error": "Notification not found"}), 404
     
-    notification = db["notifications"][notification_id]
-    if notification["user_id"] != current_user:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
-    notification["read"] = True
-    return {"message": "Notification marked as read"}
+    db["notifications"][notification_id]["read"] = True
+    return jsonify({"message": "Notification marked as read"})
 
-@app.post("/api/integrations", response_model=APIIntegration)
-async def create_api_integration(request: CreateAPIIntegrationRequest, current_user: str = Depends(get_current_user)):
-    if request.project_id not in db["projects"]:
-        raise HTTPException(status_code=404, detail="Project not found")
+@app.route('/api/integrations', methods=['POST'])
+def create_api_integration():
+    data = request.get_json()
+    current_user = get_current_user()
     
     integration_id = str(uuid.uuid4())
-    integration = APIIntegration(
-        id=integration_id,
-        name=request.name,
-        endpoint=request.endpoint,
-        method=request.method,
-        headers=request.headers,
-        project_id=request.project_id,
-        created_by=current_user,
-        created_at=datetime.now()
-    )
-    db["api_integrations"][integration_id] = integration.dict()
-    return integration
+    integration = {
+        "id": integration_id,
+        "name": data.get("name"),
+        "endpoint": data.get("endpoint"),
+        "method": data.get("method"),
+        "headers": data.get("headers", {}),
+        "project_id": data.get("project_id"),
+        "created_by": current_user,
+        "created_at": datetime.now().isoformat()
+    }
+    db["api_integrations"][integration_id] = integration
+    return jsonify(integration)
 
-@app.get("/api/integrations", response_model=List[APIIntegration])
-async def get_api_integrations(project_id: Optional[str] = None, current_user: str = Depends(get_current_user)):
+@app.route('/api/integrations', methods=['GET'])
+def get_api_integrations():
+    project_id = request.args.get('project_id')
     integrations = []
     for integration in db["api_integrations"].values():
         if project_id is None or integration["project_id"] == project_id:
-            integrations.append(APIIntegration(**integration))
-    return integrations
+            integrations.append(integration)
+    return jsonify(integrations)
 
-@app.post("/api/integrations/{integration_id}/execute")
-async def execute_api_integration(integration_id: str, payload: Dict[str, Any] = {}, current_user: str = Depends(get_current_user)):
+@app.route('/api/integrations/<integration_id>/execute', methods=['POST'])
+def execute_api_integration(integration_id):
     if integration_id not in db["api_integrations"]:
-        raise HTTPException(status_code=404, detail="Integration not found")
+        return jsonify({"error": "Integration not found"}), 404
     
-    integration = db["api_integrations"][integration_id]
-    
-    return {
-        "status": "success",
-        "message": f"API call to {integration['endpoint']} executed successfully",
-        "integration": integration,
-        "payload": payload
-    }
+    return jsonify({"message": "API integration executed successfully", "result": "Demo response"})
 
-@app.delete("/api/integrations/{integration_id}")
-async def delete_api_integration(integration_id: str, current_user: str = Depends(get_current_user)):
+@app.route('/api/integrations/<integration_id>', methods=['DELETE'])
+def delete_api_integration(integration_id):
     if integration_id not in db["api_integrations"]:
-        raise HTTPException(status_code=404, detail="Integration not found")
-    
-    integration = db["api_integrations"][integration_id]
-    if integration["created_by"] != current_user:
-        raise HTTPException(status_code=403, detail="Not authorized to delete this integration")
+        return jsonify({"error": "Integration not found"}), 404
     
     del db["api_integrations"][integration_id]
-    return {"message": "Integration deleted successfully"}
+    return jsonify({"message": "Integration deleted successfully"})
 
-@app.on_event("startup")
-async def startup_event():
-    user_id = "user_1"
-    demo_user = User(
-        id=user_id,
-        name="Demo User",
-        email="demo@example.com",
-        role=UserRole.ADMIN,
-        created_at=datetime.now()
-    )
-    db["users"][user_id] = demo_user.dict()
-    
-    team_id = "team_1"
-    demo_team = Team(
-        id=team_id,
-        name="Development Team",
-        description="A development team for testing subtask creation and Gantt chart functionality",
-        admin_id=user_id,
-        member_ids=[user_id],
-        created_at=datetime.now()
-    )
-    db["teams"][team_id] = demo_team.dict()
-    db["users"][user_id]["team_ids"] = [team_id]
-    
-    project_id = "project_1"
-    demo_project = Project(
-        id=project_id,
-        name="Test Project for Subtasks",
-        description="A test project to verify subtask creation and Gantt chart functionality",
-        team_id=team_id,
-        start_date=date(2024, 1, 15),
-        end_date=date(2024, 3, 15),
-        status="active",
-        created_at=datetime.now(),
-        created_by=user_id
-    )
-    db["projects"][project_id] = demo_project.dict()
-    
-    parent_task_id = "task_1"
-    parent_task = Task(
-        id=parent_task_id,
-        title="Main Feature Development",
-        description="Develop the main feature with multiple subtasks",
-        project_id=project_id,
-        assigned_to=user_id,
-        status=TaskStatus.IN_PROGRESS,
-        priority=TaskPriority.HIGH,
-        start_date=date(2024, 1, 20),
-        end_date=date(2024, 2, 20),
-        estimated_hours=40.0,
-        progress=30,
-        created_at=datetime.now(),
-        created_by=user_id,
-        updated_at=datetime.now()
-    )
-    db["tasks"][parent_task_id] = parent_task.dict()
-    
-    subtask_id = "task_2"
-    subtask = Task(
-        id=subtask_id,
-        title="Database Schema Design",
-        description="Design and implement database schema",
-        project_id=project_id,
-        parent_task_id=parent_task_id,
-        assigned_to=user_id,
-        status=TaskStatus.DONE,
-        priority=TaskPriority.MEDIUM,
-        start_date=date(2024, 1, 22),
-        end_date=date(2024, 1, 28),
-        estimated_hours=16.0,
-        progress=100,
-        created_at=datetime.now(),
-        created_by=user_id,
-        updated_at=datetime.now()
-    )
-    db["tasks"][subtask_id] = subtask.dict()
-    
-    task2_id = "task_3"
-    task2 = Task(
-        id=task2_id,
-        title="Frontend Components",
-        description="Create reusable frontend components",
-        project_id=project_id,
-        assigned_to=user_id,
-        status=TaskStatus.TODO,
-        priority=TaskPriority.MEDIUM,
-        start_date=date(2024, 2, 1),
-        end_date=date(2024, 2, 15),
-        estimated_hours=24.0,
-        progress=0,
-        created_at=datetime.now(),
-        created_by=user_id,
-        updated_at=datetime.now()
-    )
-    db["tasks"][task2_id] = task2.dict()
+@app.route('/healthz', methods=['GET'])
+def healthz():
+    return jsonify({"status": "ok"})
 
-@app.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
+def init_demo_data():
+    users_data = [
+        {"id": "user_1", "name": "Demo User", "email": "demo@example.com", "role": UserRole.ADMIN},
+        {"id": "user_2", "name": "John Doe", "email": "john@example.com", "role": UserRole.MANAGER},
+        {"id": "user_3", "name": "Jane Smith", "email": "jane@example.com", "role": UserRole.MEMBER}
+    ]
+    
+    for user_data in users_data:
+        user = {
+            **user_data,
+            "team_ids": [],
+            "created_at": datetime.now().isoformat()
+        }
+        db["users"][user_data["id"]] = user
+    
+    team = {
+        "id": "team_1",
+        "name": "Development Team",
+        "description": "Main development team",
+        "admin_id": "user_1",
+        "member_ids": ["user_1", "user_2", "user_3"],
+        "created_at": datetime.now().isoformat()
+    }
+    db["teams"]["team_1"] = team
+    
+    for user_id in ["user_1", "user_2", "user_3"]:
+        db["users"][user_id]["team_ids"].append("team_1")
+    
+    project = {
+        "id": "project_1",
+        "name": "Test Project for Subtasks",
+        "description": "A project to test subtask functionality",
+        "team_id": "team_1",
+        "start_date": "2024-01-15",
+        "end_date": "2024-03-15",
+        "status": "active",
+        "created_at": datetime.now().isoformat(),
+        "created_by": "user_1"
+    }
+    db["projects"]["project_1"] = project
+    
+    tasks_data = [
+        {
+            "id": "task_1",
+            "title": "Main Feature Development",
+            "description": "Develop the main feature of the application",
+            "project_id": "project_1",
+            "parent_task_id": None,
+            "assigned_to": "user_1",
+            "status": TaskStatus.IN_PROGRESS,
+            "priority": TaskPriority.HIGH,
+            "start_date": "2024-01-20",
+            "end_date": "2024-02-20",
+            "estimated_hours": 80.0,
+            "actual_hours": 24.0,
+            "progress": 30
+        },
+        {
+            "id": "task_2",
+            "title": "Database Schema Design",
+            "description": "Design and implement database schema",
+            "project_id": "project_1",
+            "parent_task_id": "task_1",
+            "assigned_to": "user_1",
+            "status": TaskStatus.DONE,
+            "priority": TaskPriority.HIGH,
+            "start_date": "2024-01-22",
+            "end_date": "2024-01-28",
+            "estimated_hours": 16.0,
+            "actual_hours": 16.0,
+            "progress": 100
+        },
+        {
+            "id": "task_3",
+            "title": "Frontend Components",
+            "description": "Create reusable frontend components",
+            "project_id": "project_1",
+            "parent_task_id": None,
+            "assigned_to": "user_1",
+            "status": TaskStatus.TODO,
+            "priority": TaskPriority.MEDIUM,
+            "start_date": "2024-02-01",
+            "end_date": "2024-02-15",
+            "estimated_hours": 40.0,
+            "actual_hours": 0.0,
+            "progress": 0
+        }
+    ]
+    
+    for task_data in tasks_data:
+        task = {
+            **task_data,
+            "file_ids": [],
+            "created_at": datetime.now().isoformat(),
+            "created_by": "user_1",
+            "updated_at": datetime.now().isoformat()
+        }
+        db["tasks"][task_data["id"]] = task
+
+if __name__ == '__main__':
+    init_demo_data()
+    app.run(host='0.0.0.0', port=8000, debug=True)
